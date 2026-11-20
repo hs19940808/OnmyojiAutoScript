@@ -31,7 +31,21 @@ class HyaDevice(BaseTask):
     def fast_screenshot(self, screenshot: ScreenshotMethod):
         self.hya_screenshot_interval.wait()
         self.hya_screenshot_interval.reset()
-        self.device.image = self.device.screenshot_window_background() if screenshot == ScreenshotMethod.WINDOW_BACKGROUND else self.device.screenshot_nemu_ipc()
+        if screenshot == ScreenshotMethod.WINDOW_BACKGROUND:
+            if not getattr(self, '_hya_use_adb_nc', False):
+                try:
+                    image = self.device.screenshot_window_background()
+                    self._hya_use_adb_nc = image.shape[:2] != (720, 1280) or image_black(image)
+                except (AttributeError, IndexError):
+                    self._hya_use_adb_nc = True
+                if self._hya_use_adb_nc:
+                    logger.warning('Hyakkiyakou window capture unavailable, black, or not 1280x720; using ADB_nc')
+                else:
+                    self.device.image = image
+            if self._hya_use_adb_nc:
+                self.device.image = self.device.screenshot_adb_nc()
+        else:
+            self.device.image = self.device.screenshot_nemu_ipc()
         if image_black(self.device.image):
             logger.error('Screenshot image is black, try again')
             raise RequestHumanTakeover('Screenshot image is black, try again')
@@ -48,7 +62,7 @@ class HyaDevice(BaseTask):
             'Click %s @ %s' % (point2str(x, y), 'Click')
         )
         if control_method == ControlMethod.MINITOUCH:
-            self.device.click_minitouch(x=x, y=y)
+            self.device.click_minitouch(x=x, y=y, fast=True)
         else:
             self.device.click_window_message(x=x, y=y, fast=True)
 

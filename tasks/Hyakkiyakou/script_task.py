@@ -188,7 +188,7 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
         # 截一张当前图
         self.screenshot()
         # 这里 response 随便给一个默认值即可，主线战斗里是 last_action
-        tracks = self.tracker(image=self.device.image, response=[0, 0, False, 10])
+        tracks = self.tracker(image=self.device.image, response=[0, 0, False, 5])
         best_score = -1
         best_class = -1
         for _id, _class, _conf, _cx, _cy, _w, _h, _v in tracks:
@@ -261,7 +261,9 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
         # 正式开始
         logger.hr('Start Hyakkiyakou')
         init_bean_flag: bool = False
-        last_action = [0, 0, False, 10]
+        last_action = [0, 0, False, 5]
+        throw_count = 0
+        freeze_frames = 0
         self.hya_fs_check_timer.reset()
         if self._config.debug_config.hya_show:
             self.debugger.show_start()
@@ -272,21 +274,18 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
             if not self.appear(self.I_CHECK_RUN):
                 continue
             if not init_bean_flag:
+                self.ensure_bean_05()
                 init_bean_flag = True
-                self.bean_05to10()
-                time.sleep(0.5)
-            #修改：在这里不再区分freeze，而是将状态传到decision用于执行冻结策略
-            #目前被禁用了 因为冰冻状态下检测正确率约等于0 全是蝉冰雪女 =.=
-            if not self.appear(self.I_HFREEZE):
-                # -------------------------------------------------------
-                freeze = self.appear(self.I_HFREEZE)
-                self.slave_state = self.update_state()
-                tracks = self.tracker(image=self.device.image, response=last_action)
-                last_action = self.agent.decision(tracks=tracks, state=self.slave_state, freeze=freeze)
-                self.do_action(last_action, state=self.slave_state)
-            else:
-                # TODO freeze state
-                tracks = []
+                continue
+            freeze = self.appear(self.I_HFREEZE)
+            if freeze:
+                freeze_frames += 1
+            self.slave_state = self.update_state()
+            tracks = self.tracker(image=self.device.image, response=last_action)
+            last_action = self.agent.decision(tracks=tracks, state=self.slave_state, freeze=freeze)
+            self.do_action(last_action, state=self.slave_state)
+            if last_action[2] and self.slave_state[0] > 0:
+                throw_count += 1
 
             # debug
             if self._config.debug_config.hya_show:
@@ -298,6 +297,8 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
                 self.debugger.show_info(tracker=self.tracker, f=self.agent.focus)
 
         logger.info('Hyakkiyakou End')
+        logger.info(f'Hyakkiyakou round summary: throws={throw_count}, '
+                    f'last_observed_beans={self.slave_state[0]}, freeze_frames={freeze_frames}')
         if self._config.debug_config.hya_show:
             self.debugger.show_stop()
         if self._config.debug_config.hya_save_result:

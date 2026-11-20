@@ -48,7 +48,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
     BUFF_ROI4: list[int] = [1100, 1, 140, 50]
 
     # 剩余豆子数量， 剩余式神数量， 一次砸豆子的数量， 第一个格子， 第二个格子， 第三个格子， 第四个格子
-    slave_state: tuple = [250, 36, 10,
+    slave_state: tuple = [250, 36, 5,
                           HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0]
 
     @cached_property
@@ -132,7 +132,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
         return current
 
     def predict_bean(self, current: int):
-        possible_beans: list[int] = [current, current - 10, current - 20]
+        possible_beans: list[int] = [current - used for used in range(0, 21, 5) if current >= used]
         for bean in possible_beans:
             if bean >= 100:
                 decade = bean // 10 % 10
@@ -144,6 +144,10 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
                 hundred_img = self.bean[hundred]
                 hundred_img.roi_back = self.HUNDRED0HUNDRED
                 if not self.appear(hundred_img):
+                    continue
+                unit_img = self.bean[bean % 10]
+                unit_img.roi_back = self.UNIT0HUNDRED
+                if not self.appear(unit_img):
                     continue
                 return bean
 
@@ -210,6 +214,18 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
 
     def bean_10to05(self):
         self.swipe(self.S_BEAN_10TO05)
+
+    def ensure_bean_05(self):
+        for _ in range(3):
+            if self.recognize_bean_05():
+                logger.info('Hyakkiyakou beans per throw: 5 (confirmed)')
+                return
+            self.bean_10to05()
+            self.screenshot()
+        if self.recognize_bean_05():
+            logger.info('Hyakkiyakou beans per throw: 5 (confirmed)')
+            return
+        raise RequestHumanTakeover('Cannot confirm 5 beans per throw')
 
     # main process
     # ------------------------------------------------------------------------------------------------------------------
@@ -284,7 +300,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
     def update_state(self):
         res_bean = self.predict_bean(self.slave_state[0])
         res_shi = self.predict_res(self.slave_state[1])
-        num_bean = 5 if self.recognize_bean_05() else 10
+        num_bean = 10 if self.recognize_bean_10() else 5
         buff_0 = self.predict_buff_state(pos=0, current=self.slave_state[3])
         buff_1 = self.predict_buff_state(pos=1, current=self.slave_state[4])
         buff_2 = self.predict_buff_state(pos=2, current=self.slave_state[5])
@@ -295,7 +311,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
         return self.slave_state
 
     def reset_state(self):
-        self.slave_state = [250, 36, 10,
+        self.slave_state = [250, 36, 5,
                           HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0]
 
 

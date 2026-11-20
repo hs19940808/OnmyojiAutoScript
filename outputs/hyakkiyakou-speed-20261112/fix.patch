@@ -1,0 +1,236 @@
+diff --git a/module/device/method/minitouch.py b/module/device/method/minitouch.py
+index c7a11b18..9dd14db9 100644
+--- a/module/device/method/minitouch.py
++++ b/module/device/method/minitouch.py
+@@ -579,12 +579,15 @@ class Minitouch(Connection):
+         self.minitouch_builder.clear()
+ 
+     @retry
+-    def click_minitouch(self, x, y):
++    def click_minitouch(self, x, y, fast=False):
+         builder = self.minitouch_builder
+         pressure = self._humanized_pressure()
+-        builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
+-        mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
+-        builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
++        if fast:
++            builder.down(x, y, pressure=pressure).commit().wait(random.randint(20, 35))
++        else:
++            builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
++            mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
++            builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
+         builder.up().commit()
+         self.minitouch_send()
+ 
+@@ -634,4 +637,4 @@ class Minitouch(Connection):
+ 
+ if __name__ == '__main__':
+     mm = Minitouch(config='oas1')
+-    mm.click_minitouch(200, 150)
+\ No newline at end of file
++    mm.click_minitouch(200, 150)
+diff --git a/tasks/Hyakkiyakou/agent/agent.py b/tasks/Hyakkiyakou/agent/agent.py
+index cbe175ef..f23ed5dc 100644
+--- a/tasks/Hyakkiyakou/agent/agent.py
++++ b/tasks/Hyakkiyakou/agent/agent.py
+@@ -69,7 +69,7 @@ class Agent:
+             'auto_bean': False
+         }
+         self.strategy = strategy
+-        self.weights: list[float] = strategy.get('weights', [1., 1., 0.7, 0.3, 0., 0.])
++        self.weights: list[float] = strategy.get('weights', [1., 1., 1., 0.8, 0., 0.])
+         self.priorities: list[int] = strategy.get('priorities', [])
+         self.invite_friend: bool = strategy.get('invite_friend', False)
+         self.auto_bean: bool = strategy.get('auto_bean', False)
+@@ -95,8 +95,8 @@ class Agent:
+             match _class:
+                 case _ if CI.MIN_G <= _class <= CI.MAX_G: weight = weights[5]
+                 case _ if CI.MIN_N <= _class <= CI.MAX_N: weight = weights[4]
+-                case _ if _class != CI.R_008 and _class != CI.R_007 and (CI.MIN_R <= _class <= CI.MAX_R):
+-                    weight = weights[3]  # 不要童男童女
++                case _ if CI.MIN_R <= _class <= CI.MAX_R:
++                    weight = weights[3]
+                 case _ if CI.MIN_SR <= _class <= CI.MAX_SR: weight = weights[2]
+                 case _ if CI.MIN_SSR <= _class <= CI.MAX_SSR: weight = 1.5 * weights[1]
+                 case _ if CI.MIN_SP <= _class <= CI.MAX_SP: weight = 1.5 * weights[0]
+diff --git a/tasks/Hyakkiyakou/agent/focus.py b/tasks/Hyakkiyakou/agent/focus.py
+index 34104c3d..c0a12aa6 100644
+--- a/tasks/Hyakkiyakou/agent/focus.py
++++ b/tasks/Hyakkiyakou/agent/focus.py
+@@ -14,6 +14,9 @@ from tasks.Hyakkiyakou.slave.hya_slave import HyaBuff
+ 
+ 
+ class Focus:
++    THROW_INTERVAL_MS = 250
++    FAST_THROW_INTERVAL_MS = 150
++
+     def __init__(self, inputs: list[tuple]):
+         self._id: int = inputs[0]
+         self._class: int = inputs[1]
+@@ -75,24 +78,16 @@ velocity: {self._v}"""
+         buff_states = state[4:] if len(state) > 4 else []  # get buff status：state[4:] = buff_0 ~ buff_3，对应 HyaBuff
+         has_prob_up = any(b == HyaBuff.BUFF_STATE6 for b in buff_states) # 是否存在“概率UP”buff（HyaBuff.BUFF_STATE6）
+         buff_omega, buff_cx, buff_cy, buff_v, buff_class = self.omega_buff(tracks, strategy['invite_friend'], has_prob_up)
++        self._omega_buff = buff_omega
+         if self._omega > buff_omega:
+-            buffed = False
+             target_x = self._cx + self._v * 100 - (self._w // 2)
+             target_y = self._cy - 40
+-            target_class = self._class # new : for class
+         else:
+-            buffed = True
+             target_x = buff_cx + buff_v * 100
+             target_y = buff_cy - 40  # top left corner
+-            target_class = buff_class # new : for class
+-
+-        # ========= 新增：利用和 gamma() 一样的区间判断当前“打的对象”是不是 SSR/SP =========
+-        is_rare_ssr_sp = False
+-        if CI.MIN_SSR <= target_class <= CI.MAX_SSR and self._omega > buff_omega:
+-            is_rare_ssr_sp = True
+-        elif CI.MIN_SP <= target_class <= CI.MAX_SP and self._omega > buff_omega:
+-            is_rare_ssr_sp = True
+-        _r = self.r(vector=state, omega=self._omega, omega_buff=self._omega_buff, is_rare_ssr_sp=is_rare_ssr_sp, freeze=freeze, is_buff=buffed)
++        # Rarity is already ranked by Agent.gamma. Do not select a rare target
++        # and then veto it here: that starves every other visible target too.
++        _r = self.r(vector=state, omega=self._omega, omega_buff=buff_omega, freeze=freeze)
+         throw = True if _r > 0 else False
+         # x, y, throw, number
+         return [target_x, target_y, throw, 10]
+@@ -125,30 +120,14 @@ velocity: {self._v}"""
+         return max_omega, max_cx, max_cy, max_v, max_class
+             
+     @classmethod
+-    def r(cls, vector: list, omega: float, omega_buff: float, is_rare_ssr_sp: bool, freeze: bool = False, is_buff: bool = False) -> float:
+-        _omega = max(omega, omega_buff)
+-        tau = - 140 / (max(101, vector[0]) - 100) # 时间冷却项：避免过密投豆
+-        upsilon = (vector[1] / 250 - vector[2] / 35) # 豆子数量 vs 进度：豆多进度低 -> 倾向多砸；豆少进度高 -> 惩罚多砸
+-        upsilon = 100 * (upsilon**2 if upsilon > 0 else - upsilon**2)
+-        result = _omega + tau + upsilon - 0.6
+-        # print(f"total: {result:.4f} | {_omega:.4f} | {tau:.4f} | {upsilon:.4f}")
+-       
+-        buff_states = vector[4:] if len(vector) > 4 else []  # get buff status：vector[4:] = buff_0 ~ buff_3，对应 HyaBuff
+-        has_prob_up = any(b == HyaBuff.BUFF_STATE6 for b in buff_states) # 是否存在“概率UP”buff（HyaBuff.BUFF_STATE6）
+-
+-        # punishment：
+-        #    no throwing when ssr/sp with no enhanced probability
+-        if is_rare_ssr_sp and not has_prob_up:
+-            result = -999.0 # stop throwing nonsense
+-        
+-        # punishment:
+-        #   only throw ssr/sp with enhanced probability or buff when freezed
+-        if freeze:
+-            # if not (is_rare_ssr_sp and has_prob_up):
+-            #     result = -999.0 # stop throwing nonsense
+-            # if is_buff:
+-            #     result = 5.0
+-            result = -999.0
+-            
+-        return result
++    def r(cls, vector: list, omega: float, omega_buff: float, freeze: bool = False) -> float:
++        # Spend beans on a valid selected target instead of saving them for
++        # probability buffs or an estimated future shikigami distribution.
++        if freeze or vector[1] <= 0:
++            return -1.0
++        buff_states = vector[4:]
++        interval = cls.FAST_THROW_INTERVAL_MS if HyaBuff.BUFF_STATE3 in buff_states else cls.THROW_INTERVAL_MS
++        if vector[0] < interval:
++            return -1.0
++        return max(omega, omega_buff)
+ 
+diff --git a/tasks/Hyakkiyakou/config.py b/tasks/Hyakkiyakou/config.py
+index 2d742b70..cd6ffdd4 100644
+--- a/tasks/Hyakkiyakou/config.py
++++ b/tasks/Hyakkiyakou/config.py
+@@ -36,8 +36,8 @@ class HyakkiyakouConfig(ConfigBase):
+     hya_priorities: str = Field(default='', description='hya_priorities_help')
+     hya_sp: float = Field(default=1., description='hya_sp_help')
+     hya_ssr: float = Field(default=1., description='hya_ssr_help')
+-    hya_sr: float = Field(default=0.7, description='hya_sr_help')
+-    hya_r: float = Field(default=0.3, description='hya_r_help')
++    hya_sr: float = Field(default=1.0, description='hya_sr_help')
++    hya_r: float = Field(default=0.8, description='hya_r_help')
+     hya_n: float = Field(default=0.0, description='hya_n_help')
+     # 呱太和N卡不是一个东西
+     hya_g: float = Field(default=0.0, description='hya_g_help')
+diff --git a/tasks/Hyakkiyakou/script_task.py b/tasks/Hyakkiyakou/script_task.py
+index 556759e6..3f0207b1 100644
+--- a/tasks/Hyakkiyakou/script_task.py
++++ b/tasks/Hyakkiyakou/script_task.py
+@@ -262,6 +262,8 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+         logger.hr('Start Hyakkiyakou')
+         init_bean_flag: bool = False
+         last_action = [0, 0, False, 10]
++        throw_count = 0
++        freeze_frames = 0
+         self.hya_fs_check_timer.reset()
+         if self._config.debug_config.hya_show:
+             self.debugger.show_start()
+@@ -275,17 +277,17 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+                 init_bean_flag = True
+                 self.bean_05to10()
+                 time.sleep(0.5)
+-            #修改：在这里不再区分freeze，而是将状态传到decision用于执行冻结策略
+-            #目前被禁用了 因为冰冻状态下检测正确率约等于0 全是蝉冰雪女 =.=
+-            if not self.appear(self.I_HFREEZE):
+-                # -------------------------------------------------------
+-                freeze = self.appear(self.I_HFREEZE)
++            # Frozen sprites are not reliably recognized by this model.
++            freeze = self.appear(self.I_HFREEZE)
++            if not freeze:
+                 self.slave_state = self.update_state()
+                 tracks = self.tracker(image=self.device.image, response=last_action)
+                 last_action = self.agent.decision(tracks=tracks, state=self.slave_state, freeze=freeze)
+                 self.do_action(last_action, state=self.slave_state)
++                if last_action[2] and self.slave_state[0] > 0:
++                    throw_count += 1
+             else:
+-                # TODO freeze state
++                freeze_frames += 1
+                 tracks = []
+ 
+             # debug
+@@ -298,6 +300,8 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+                 self.debugger.show_info(tracker=self.tracker, f=self.agent.focus)
+ 
+         logger.info('Hyakkiyakou End')
++        logger.info(f'Hyakkiyakou round summary: throws={throw_count}, '
++                    f'last_observed_beans={self.slave_state[0]}, freeze_frames={freeze_frames}')
+         if self._config.debug_config.hya_show:
+             self.debugger.show_stop()
+         if self._config.debug_config.hya_save_result:
+diff --git a/tasks/Hyakkiyakou/slave/hya_device.py b/tasks/Hyakkiyakou/slave/hya_device.py
+index 117b8474..3b8fb9cd 100644
+--- a/tasks/Hyakkiyakou/slave/hya_device.py
++++ b/tasks/Hyakkiyakou/slave/hya_device.py
+@@ -31,7 +31,21 @@ class HyaDevice(BaseTask):
+     def fast_screenshot(self, screenshot: ScreenshotMethod):
+         self.hya_screenshot_interval.wait()
+         self.hya_screenshot_interval.reset()
+-        self.device.image = self.device.screenshot_window_background() if screenshot == ScreenshotMethod.WINDOW_BACKGROUND else self.device.screenshot_nemu_ipc()
++        if screenshot == ScreenshotMethod.WINDOW_BACKGROUND:
++            if not getattr(self, '_hya_use_adb_nc', False):
++                try:
++                    image = self.device.screenshot_window_background()
++                    self._hya_use_adb_nc = image.shape[:2] != (720, 1280) or image_black(image)
++                except (AttributeError, IndexError):
++                    self._hya_use_adb_nc = True
++                if self._hya_use_adb_nc:
++                    logger.warning('Hyakkiyakou window capture unavailable, black, or not 1280x720; using ADB_nc')
++                else:
++                    self.device.image = image
++            if self._hya_use_adb_nc:
++                self.device.image = self.device.screenshot_adb_nc()
++        else:
++            self.device.image = self.device.screenshot_nemu_ipc()
+         if image_black(self.device.image):
+             logger.error('Screenshot image is black, try again')
+             raise RequestHumanTakeover('Screenshot image is black, try again')
+@@ -48,7 +62,7 @@ class HyaDevice(BaseTask):
+             'Click %s @ %s' % (point2str(x, y), 'Click')
+         )
+         if control_method == ControlMethod.MINITOUCH:
+-            self.device.click_minitouch(x=x, y=y)
++            self.device.click_minitouch(x=x, y=y, fast=True)
+         else:
+             self.device.click_window_message(x=x, y=y, fast=True)
+ 

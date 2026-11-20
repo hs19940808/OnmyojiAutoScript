@@ -1,0 +1,448 @@
+diff --git a/module/device/method/minitouch.py b/module/device/method/minitouch.py
+index c7a11b18..9dd14db9 100644
+--- a/module/device/method/minitouch.py
++++ b/module/device/method/minitouch.py
+@@ -579,12 +579,15 @@ class Minitouch(Connection):
+         self.minitouch_builder.clear()
+ 
+     @retry
+-    def click_minitouch(self, x, y):
++    def click_minitouch(self, x, y, fast=False):
+         builder = self.minitouch_builder
+         pressure = self._humanized_pressure()
+-        builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
+-        mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
+-        builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
++        if fast:
++            builder.down(x, y, pressure=pressure).commit().wait(random.randint(20, 35))
++        else:
++            builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
++            mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
++            builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
+         builder.up().commit()
+         self.minitouch_send()
+ 
+@@ -634,4 +637,4 @@ class Minitouch(Connection):
+ 
+ if __name__ == '__main__':
+     mm = Minitouch(config='oas1')
+-    mm.click_minitouch(200, 150)
+\ No newline at end of file
++    mm.click_minitouch(200, 150)
+diff --git a/tasks/Hyakkiyakou/agent/agent.py b/tasks/Hyakkiyakou/agent/agent.py
+index cbe175ef..8ff5bcf5 100644
+--- a/tasks/Hyakkiyakou/agent/agent.py
++++ b/tasks/Hyakkiyakou/agent/agent.py
+@@ -55,7 +55,6 @@ def embed_patch_in_canvas(canvas, patch, position=(0, 0), patch_size=(300, 300))
+ 
+ class Agent:
+     GAUSSIAN = generate_gaussian_patch()
+-    OBSERVE_THRESHOLD = 0.6
+     # --------------------------------------------------------------------------------
+ 
+     def __init__(self, strategy: dict = None):
+@@ -69,7 +68,7 @@ class Agent:
+             'auto_bean': False
+         }
+         self.strategy = strategy
+-        self.weights: list[float] = strategy.get('weights', [1., 1., 0.7, 0.3, 0., 0.])
++        self.weights: list[float] = strategy.get('weights', [1., 0.9, 0.8, 0.7, 0.6, 0.6])
+         self.priorities: list[int] = strategy.get('priorities', [])
+         self.invite_friend: bool = strategy.get('invite_friend', False)
+         self.auto_bean: bool = strategy.get('auto_bean', False)
+@@ -95,8 +94,8 @@ class Agent:
+             match _class:
+                 case _ if CI.MIN_G <= _class <= CI.MAX_G: weight = weights[5]
+                 case _ if CI.MIN_N <= _class <= CI.MAX_N: weight = weights[4]
+-                case _ if _class != CI.R_008 and _class != CI.R_007 and (CI.MIN_R <= _class <= CI.MAX_R):
+-                    weight = weights[3]  # 不要童男童女
++                case _ if CI.MIN_R <= _class <= CI.MAX_R:
++                    weight = weights[3]
+                 case _ if CI.MIN_SR <= _class <= CI.MAX_SR: weight = weights[2]
+                 case _ if CI.MIN_SSR <= _class <= CI.MAX_SSR: weight = 1.5 * weights[1]
+                 case _ if CI.MIN_SP <= _class <= CI.MAX_SP: weight = 1.5 * weights[0]
+@@ -104,12 +103,12 @@ class Agent:
+                 #     weight = -1.
+                 #     _cy += 100
+                 case _: continue
+-            for priority in priorities:  # 我的代码在你之上
++            for priority in priorities:  # 同稀有度内的自定义优先目标
+                 if priority == _class:
+                     weight = 1.7
+                     break
+-            if weight == 0.:
+-                continue
++            # Weights break ties inside a rarity, never disable a visible card.
++            weight = max(0.01, weight)
+             z = embed_patch_in_canvas(canvas=z, patch=(mu * weight) * Agent.GAUSSIAN, position=(_cx, _cy))
+         return z
+ 
+@@ -145,14 +144,19 @@ class Agent:
+         return result
+ 
+     def check_observe(self, tracks: list[tuple]):
+-        z = Agent.gamma(tracks=tracks, weights=self.weights, priorities=self.priorities)
+-        focus = Agent.argmax_gamma(z=z, tracks=tracks)
+-        omega = focus.omega(z)
+-        if omega < self.OBSERVE_THRESHOLD:
++        candidates = [track for track in tracks
++                      if self.rarity_rank(track[1]) > 0
++                      and 0 <= track[3] < 1280 and 0 <= track[4] < 720]
++        if not candidates:
+             if self.focus is not None:
+-                logger.info(f'Focus disappear')
++                logger.info('Focus disappear')
+             self.focus = None
+             return
++        highest_rarity = max(self.rarity_rank(track[1]) for track in candidates)
++        candidates = [track for track in candidates if self.rarity_rank(track[1]) == highest_rarity]
++        z = Agent.gamma(tracks=candidates, weights=self.weights, priorities=self.priorities)
++        focus = Agent.argmax_gamma(z=z, tracks=candidates)
++        omega = focus.omega(z)
+         if self.focus is None or self.focus != focus:
+             logger.info(f'Focus changed, now: {id2name(focus._class)}')
+             self.focus = focus
+@@ -163,3 +167,17 @@ class Agent:
+         # if Debugger.info_enable:
+         #     self.focus.show()
+ 
++    @staticmethod
++    def rarity_rank(class_id: int) -> int:
++        for rank, lower, upper in (
++            (5, CI.MIN_SP, CI.MAX_SP),
++            (4, CI.MIN_SSR, CI.MAX_SSR),
++            (3, CI.MIN_SR, CI.MAX_SR),
++            (2, CI.MIN_R, CI.MAX_R),
++            (1, CI.MIN_N, CI.MAX_N),
++            (1, CI.MIN_G, CI.MAX_G),
++        ):
++            if lower <= class_id <= upper:
++                return rank
++        return 0
++
+diff --git a/tasks/Hyakkiyakou/agent/focus.py b/tasks/Hyakkiyakou/agent/focus.py
+index 34104c3d..b547df19 100644
+--- a/tasks/Hyakkiyakou/agent/focus.py
++++ b/tasks/Hyakkiyakou/agent/focus.py
+@@ -7,13 +7,15 @@ from cached_property import cached_property
+ from module.logger import logger
+ 
+ from oashya.labels import id2label, id2name
+-from oashya.labels import CLASSINDEX as CI
+ 
+ # get buff status
+ from tasks.Hyakkiyakou.slave.hya_slave import HyaBuff
+ 
+ 
+ class Focus:
++    THROW_INTERVAL_MS = 250
++    FAST_THROW_INTERVAL_MS = 150
++
+     def __init__(self, inputs: list[tuple]):
+         self._id: int = inputs[0]
+         self._class: int = inputs[1]
+@@ -25,7 +27,6 @@ class Focus:
+         self._v: float = inputs[7]
+         # -----------------------
+         self._omega: float = 0.
+-        self._omega_buff: float = 0.
+ 
+     def __eq__(self, o):
+         return self._id == o._id or o._class == self._class
+@@ -71,84 +72,24 @@ velocity: {self._v}"""
+         self._v = focus._v
+ 
+     def decision(self, tracks, strategy, state, freeze: bool = False) -> list:
+-
+-        buff_states = state[4:] if len(state) > 4 else []  # get buff status：state[4:] = buff_0 ~ buff_3，对应 HyaBuff
+-        has_prob_up = any(b == HyaBuff.BUFF_STATE6 for b in buff_states) # 是否存在“概率UP”buff（HyaBuff.BUFF_STATE6）
+-        buff_omega, buff_cx, buff_cy, buff_v, buff_class = self.omega_buff(tracks, strategy['invite_friend'], has_prob_up)
+-        if self._omega > buff_omega:
+-            buffed = False
+-            target_x = self._cx + self._v * 100 - (self._w // 2)
+-            target_y = self._cy - 40
+-            target_class = self._class # new : for class
+-        else:
+-            buffed = True
+-            target_x = buff_cx + buff_v * 100
+-            target_y = buff_cy - 40  # top left corner
+-            target_class = buff_class # new : for class
+-
+-        # ========= 新增：利用和 gamma() 一样的区间判断当前“打的对象”是不是 SSR/SP =========
+-        is_rare_ssr_sp = False
+-        if CI.MIN_SSR <= target_class <= CI.MAX_SSR and self._omega > buff_omega:
+-            is_rare_ssr_sp = True
+-        elif CI.MIN_SP <= target_class <= CI.MAX_SP and self._omega > buff_omega:
+-            is_rare_ssr_sp = True
+-        _r = self.r(vector=state, omega=self._omega, omega_buff=self._omega_buff, is_rare_ssr_sp=is_rare_ssr_sp, freeze=freeze, is_buff=buffed)
++        target_x = min(1279, max(0, self._cx + self._v * 100 - (self._w // 2)))
++        target_y = min(719, max(0, self._cy - 40))
++        # Agent has already chosen the highest-rarity visible shikigami.
++        # A buff must neither replace that target nor gate throwing at it.
++        _r = self.r(vector=state, omega=self._omega, omega_buff=0, freeze=freeze)
+         throw = True if _r > 0 else False
+         # x, y, throw, number
+-        return [target_x, target_y, throw, 10]
+-
+-    def omega_buff(self, tracks, invite_friend: bool, has_prob_up: bool) -> float:
+-        max_omega = 0.
+-        max_cx = 0
+-        max_cy = 0
+-        max_v = 0
+-        max_class = 0
+-
+-        focus_is_ssr_sp = (CI.MIN_SSR <= self._class <= CI.MAX_SSR or CI.MIN_SP <= self._class <= CI.MAX_SP)
+-
+-        for _id, _class, _conf, _cx, _cy, _w, _h, _v in tracks:
+-            _current_omega = 0.
+-            match _class:
+-                case CI.BUFF_004: _current_omega = 2.2
+-                case CI.BUFF_006: _current_omega = 2.0
+-                case CI.BUFF_007: _current_omega = 2.0 if invite_friend and _cx <= 1000 else 0
+-                case CI.BUFF_002: _current_omega = 2.0 if self._omega >= 1.5 else 0
+-                case CI.BUFF_003: _current_omega = 2.0 if self._omega >= 1.5 and _cx <= 640 else 0
+-                # case CI.BUFF_005: _current_omega = max(self._omega + 0.1, 3.0) if focus_is_ssr_sp and has_prob_up else 0 # 冻住，不许跑
+-                case _: pass
+-            if _current_omega > max_omega:
+-                max_omega = _current_omega
+-                max_cx = _cx
+-                max_cy = _cy
+-                max_v = _v
+-                max_class = _class
+-        return max_omega, max_cx, max_cy, max_v, max_class
+-            
++        return [target_x, target_y, throw, 5]
++
+     @classmethod
+-    def r(cls, vector: list, omega: float, omega_buff: float, is_rare_ssr_sp: bool, freeze: bool = False, is_buff: bool = False) -> float:
+-        _omega = max(omega, omega_buff)
+-        tau = - 140 / (max(101, vector[0]) - 100) # 时间冷却项：避免过密投豆
+-        upsilon = (vector[1] / 250 - vector[2] / 35) # 豆子数量 vs 进度：豆多进度低 -> 倾向多砸；豆少进度高 -> 惩罚多砸
+-        upsilon = 100 * (upsilon**2 if upsilon > 0 else - upsilon**2)
+-        result = _omega + tau + upsilon - 0.6
+-        # print(f"total: {result:.4f} | {_omega:.4f} | {tau:.4f} | {upsilon:.4f}")
+-       
+-        buff_states = vector[4:] if len(vector) > 4 else []  # get buff status：vector[4:] = buff_0 ~ buff_3，对应 HyaBuff
+-        has_prob_up = any(b == HyaBuff.BUFF_STATE6 for b in buff_states) # 是否存在“概率UP”buff（HyaBuff.BUFF_STATE6）
+-
+-        # punishment：
+-        #    no throwing when ssr/sp with no enhanced probability
+-        if is_rare_ssr_sp and not has_prob_up:
+-            result = -999.0 # stop throwing nonsense
+-        
+-        # punishment:
+-        #   only throw ssr/sp with enhanced probability or buff when freezed
+-        if freeze:
+-            # if not (is_rare_ssr_sp and has_prob_up):
+-            #     result = -999.0 # stop throwing nonsense
+-            # if is_buff:
+-            #     result = 5.0
+-            result = -999.0
+-            
+-        return result
++    def r(cls, vector: list, omega: float, omega_buff: float, freeze: bool = False) -> float:
++        # Spend beans on a valid selected target instead of saving them for
++        # probability buffs or an estimated future shikigami distribution.
++        if vector[1] <= 0:
++            return -1.0
++        buff_states = vector[4:]
++        interval = cls.FAST_THROW_INTERVAL_MS if HyaBuff.BUFF_STATE3 in buff_states else cls.THROW_INTERVAL_MS
++        if vector[0] < interval:
++            return -1.0
++        return max(omega, omega_buff)
+ 
+diff --git a/tasks/Hyakkiyakou/config.py b/tasks/Hyakkiyakou/config.py
+index 2d742b70..24cab1bb 100644
+--- a/tasks/Hyakkiyakou/config.py
++++ b/tasks/Hyakkiyakou/config.py
+@@ -35,12 +35,12 @@ class HyakkiyakouConfig(ConfigBase):
+     hya_auto_bean: bool = Field(default=False, description='hya_auto_bean_help')
+     hya_priorities: str = Field(default='', description='hya_priorities_help')
+     hya_sp: float = Field(default=1., description='hya_sp_help')
+-    hya_ssr: float = Field(default=1., description='hya_ssr_help')
+-    hya_sr: float = Field(default=0.7, description='hya_sr_help')
+-    hya_r: float = Field(default=0.3, description='hya_r_help')
+-    hya_n: float = Field(default=0.0, description='hya_n_help')
+-    # 呱太和N卡不是一个东西
+-    hya_g: float = Field(default=0.0, description='hya_g_help')
++    hya_ssr: float = Field(default=0.9, description='hya_ssr_help')
++    hya_sr: float = Field(default=0.8, description='hya_sr_help')
++    hya_r: float = Field(default=0.7, description='hya_r_help')
++    hya_n: float = Field(default=0.6, description='hya_n_help')
++    # 呱太与N卡采用相同的最低稀有度优先级。
++    hya_g: float = Field(default=0.6, description='hya_g_help')
+ 
+ 
+ class HyakkiyakouModels(ConfigBase):
+diff --git a/tasks/Hyakkiyakou/script_task.py b/tasks/Hyakkiyakou/script_task.py
+index 556759e6..2c5c628c 100644
+--- a/tasks/Hyakkiyakou/script_task.py
++++ b/tasks/Hyakkiyakou/script_task.py
+@@ -188,7 +188,7 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+         # 截一张当前图
+         self.screenshot()
+         # 这里 response 随便给一个默认值即可，主线战斗里是 last_action
+-        tracks = self.tracker(image=self.device.image, response=[0, 0, False, 10])
++        tracks = self.tracker(image=self.device.image, response=[0, 0, False, 5])
+         best_score = -1
+         best_class = -1
+         for _id, _class, _conf, _cx, _cy, _w, _h, _v in tracks:
+@@ -261,7 +261,9 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+         # 正式开始
+         logger.hr('Start Hyakkiyakou')
+         init_bean_flag: bool = False
+-        last_action = [0, 0, False, 10]
++        last_action = [0, 0, False, 5]
++        throw_count = 0
++        freeze_frames = 0
+         self.hya_fs_check_timer.reset()
+         if self._config.debug_config.hya_show:
+             self.debugger.show_start()
+@@ -272,21 +274,18 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+             if not self.appear(self.I_CHECK_RUN):
+                 continue
+             if not init_bean_flag:
++                self.ensure_bean_05()
+                 init_bean_flag = True
+-                self.bean_05to10()
+-                time.sleep(0.5)
+-            #修改：在这里不再区分freeze，而是将状态传到decision用于执行冻结策略
+-            #目前被禁用了 因为冰冻状态下检测正确率约等于0 全是蝉冰雪女 =.=
+-            if not self.appear(self.I_HFREEZE):
+-                # -------------------------------------------------------
+-                freeze = self.appear(self.I_HFREEZE)
+-                self.slave_state = self.update_state()
+-                tracks = self.tracker(image=self.device.image, response=last_action)
+-                last_action = self.agent.decision(tracks=tracks, state=self.slave_state, freeze=freeze)
+-                self.do_action(last_action, state=self.slave_state)
+-            else:
+-                # TODO freeze state
+-                tracks = []
++                continue
++            freeze = self.appear(self.I_HFREEZE)
++            if freeze:
++                freeze_frames += 1
++            self.slave_state = self.update_state()
++            tracks = self.tracker(image=self.device.image, response=last_action)
++            last_action = self.agent.decision(tracks=tracks, state=self.slave_state, freeze=freeze)
++            self.do_action(last_action, state=self.slave_state)
++            if last_action[2] and self.slave_state[0] > 0:
++                throw_count += 1
+ 
+             # debug
+             if self._config.debug_config.hya_show:
+@@ -298,6 +297,8 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
+                 self.debugger.show_info(tracker=self.tracker, f=self.agent.focus)
+ 
+         logger.info('Hyakkiyakou End')
++        logger.info(f'Hyakkiyakou round summary: throws={throw_count}, '
++                    f'last_observed_beans={self.slave_state[0]}, freeze_frames={freeze_frames}')
+         if self._config.debug_config.hya_show:
+             self.debugger.show_stop()
+         if self._config.debug_config.hya_save_result:
+diff --git a/tasks/Hyakkiyakou/slave/hya_device.py b/tasks/Hyakkiyakou/slave/hya_device.py
+index 117b8474..3b8fb9cd 100644
+--- a/tasks/Hyakkiyakou/slave/hya_device.py
++++ b/tasks/Hyakkiyakou/slave/hya_device.py
+@@ -31,7 +31,21 @@ class HyaDevice(BaseTask):
+     def fast_screenshot(self, screenshot: ScreenshotMethod):
+         self.hya_screenshot_interval.wait()
+         self.hya_screenshot_interval.reset()
+-        self.device.image = self.device.screenshot_window_background() if screenshot == ScreenshotMethod.WINDOW_BACKGROUND else self.device.screenshot_nemu_ipc()
++        if screenshot == ScreenshotMethod.WINDOW_BACKGROUND:
++            if not getattr(self, '_hya_use_adb_nc', False):
++                try:
++                    image = self.device.screenshot_window_background()
++                    self._hya_use_adb_nc = image.shape[:2] != (720, 1280) or image_black(image)
++                except (AttributeError, IndexError):
++                    self._hya_use_adb_nc = True
++                if self._hya_use_adb_nc:
++                    logger.warning('Hyakkiyakou window capture unavailable, black, or not 1280x720; using ADB_nc')
++                else:
++                    self.device.image = image
++            if self._hya_use_adb_nc:
++                self.device.image = self.device.screenshot_adb_nc()
++        else:
++            self.device.image = self.device.screenshot_nemu_ipc()
+         if image_black(self.device.image):
+             logger.error('Screenshot image is black, try again')
+             raise RequestHumanTakeover('Screenshot image is black, try again')
+@@ -48,7 +62,7 @@ class HyaDevice(BaseTask):
+             'Click %s @ %s' % (point2str(x, y), 'Click')
+         )
+         if control_method == ControlMethod.MINITOUCH:
+-            self.device.click_minitouch(x=x, y=y)
++            self.device.click_minitouch(x=x, y=y, fast=True)
+         else:
+             self.device.click_window_message(x=x, y=y, fast=True)
+ 
+diff --git a/tasks/Hyakkiyakou/slave/hya_slave.py b/tasks/Hyakkiyakou/slave/hya_slave.py
+index fd32c4cd..c53227a2 100644
+--- a/tasks/Hyakkiyakou/slave/hya_slave.py
++++ b/tasks/Hyakkiyakou/slave/hya_slave.py
+@@ -48,7 +48,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+     BUFF_ROI4: list[int] = [1100, 1, 140, 50]
+ 
+     # 剩余豆子数量， 剩余式神数量， 一次砸豆子的数量， 第一个格子， 第二个格子， 第三个格子， 第四个格子
+-    slave_state: tuple = [250, 36, 10,
++    slave_state: tuple = [250, 36, 5,
+                           HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0]
+ 
+     @cached_property
+@@ -132,7 +132,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+         return current
+ 
+     def predict_bean(self, current: int):
+-        possible_beans: list[int] = [current, current - 10, current - 20]
++        possible_beans: list[int] = [current - used for used in range(0, 21, 5) if current >= used]
+         for bean in possible_beans:
+             if bean >= 100:
+                 decade = bean // 10 % 10
+@@ -145,6 +145,10 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+                 hundred_img.roi_back = self.HUNDRED0HUNDRED
+                 if not self.appear(hundred_img):
+                     continue
++                unit_img = self.bean[bean % 10]
++                unit_img.roi_back = self.UNIT0HUNDRED
++                if not self.appear(unit_img):
++                    continue
+                 return bean
+ 
+             elif bean >= 10:
+@@ -211,6 +215,18 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+     def bean_10to05(self):
+         self.swipe(self.S_BEAN_10TO05)
+ 
++    def ensure_bean_05(self):
++        for _ in range(3):
++            if self.recognize_bean_05():
++                logger.info('Hyakkiyakou beans per throw: 5 (confirmed)')
++                return
++            self.bean_10to05()
++            self.screenshot()
++        if self.recognize_bean_05():
++            logger.info('Hyakkiyakou beans per throw: 5 (confirmed)')
++            return
++        raise RequestHumanTakeover('Cannot confirm 5 beans per throw')
++
+     # main process
+     # ------------------------------------------------------------------------------------------------------------------
+ 
+@@ -284,7 +300,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+     def update_state(self):
+         res_bean = self.predict_bean(self.slave_state[0])
+         res_shi = self.predict_res(self.slave_state[1])
+-        num_bean = 5 if self.recognize_bean_05() else 10
++        num_bean = 10 if self.recognize_bean_10() else 5
+         buff_0 = self.predict_buff_state(pos=0, current=self.slave_state[3])
+         buff_1 = self.predict_buff_state(pos=1, current=self.slave_state[4])
+         buff_2 = self.predict_buff_state(pos=2, current=self.slave_state[5])
+@@ -295,7 +311,7 @@ class HyaSlave(HyaDevice, HyaColor, HyakkiyakouAssets):
+         return self.slave_state
+ 
+     def reset_state(self):
+-        self.slave_state = [250, 36, 10,
++        self.slave_state = [250, 36, 5,
+                           HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0, HyaBuff.BUFF_STATE0]
+ 
+ 

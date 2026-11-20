@@ -579,12 +579,15 @@ class Minitouch(Connection):
         self.minitouch_builder.clear()
 
     @retry
-    def click_minitouch(self, x, y):
+    def click_minitouch(self, x, y, fast=False):
         builder = self.minitouch_builder
         pressure = self._humanized_pressure()
-        builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
-        mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
-        builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
+        if fast:
+            builder.down(x, y, pressure=pressure).commit().wait(random.randint(20, 35))
+        else:
+            builder.down(x, y, pressure=pressure).commit().wait(self._humanized_dwell())
+            mx, my = x + random.randint(-2, 2), y + random.randint(-2, 2)
+            builder.move(mx, my, pressure=pressure).commit().wait(random.randint(8, 20))
         builder.up().commit()
         self.minitouch_send()
 

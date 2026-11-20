@@ -55,7 +55,6 @@ def embed_patch_in_canvas(canvas, patch, position=(0, 0), patch_size=(300, 300))
 
 class Agent:
     GAUSSIAN = generate_gaussian_patch()
-    OBSERVE_THRESHOLD = 0.6
     # --------------------------------------------------------------------------------
 
     def __init__(self, strategy: dict = None):
@@ -69,7 +68,7 @@ class Agent:
             'auto_bean': False
         }
         self.strategy = strategy
-        self.weights: list[float] = strategy.get('weights', [1., 1., 0.7, 0.3, 0., 0.])
+        self.weights: list[float] = strategy.get('weights', [1., 0.9, 0.8, 0.7, 0.6, 0.6])
         self.priorities: list[int] = strategy.get('priorities', [])
         self.invite_friend: bool = strategy.get('invite_friend', False)
         self.auto_bean: bool = strategy.get('auto_bean', False)
@@ -95,8 +94,8 @@ class Agent:
             match _class:
                 case _ if CI.MIN_G <= _class <= CI.MAX_G: weight = weights[5]
                 case _ if CI.MIN_N <= _class <= CI.MAX_N: weight = weights[4]
-                case _ if _class != CI.R_008 and _class != CI.R_007 and (CI.MIN_R <= _class <= CI.MAX_R):
-                    weight = weights[3]  # 不要童男童女
+                case _ if CI.MIN_R <= _class <= CI.MAX_R:
+                    weight = weights[3]
                 case _ if CI.MIN_SR <= _class <= CI.MAX_SR: weight = weights[2]
                 case _ if CI.MIN_SSR <= _class <= CI.MAX_SSR: weight = 1.5 * weights[1]
                 case _ if CI.MIN_SP <= _class <= CI.MAX_SP: weight = 1.5 * weights[0]
@@ -104,12 +103,12 @@ class Agent:
                 #     weight = -1.
                 #     _cy += 100
                 case _: continue
-            for priority in priorities:  # 我的代码在你之上
+            for priority in priorities:  # 同稀有度内的自定义优先目标
                 if priority == _class:
                     weight = 1.7
                     break
-            if weight == 0.:
-                continue
+            # Weights break ties inside a rarity, never disable a visible card.
+            weight = max(0.01, weight)
             z = embed_patch_in_canvas(canvas=z, patch=(mu * weight) * Agent.GAUSSIAN, position=(_cx, _cy))
         return z
 
@@ -145,14 +144,19 @@ class Agent:
         return result
 
     def check_observe(self, tracks: list[tuple]):
-        z = Agent.gamma(tracks=tracks, weights=self.weights, priorities=self.priorities)
-        focus = Agent.argmax_gamma(z=z, tracks=tracks)
-        omega = focus.omega(z)
-        if omega < self.OBSERVE_THRESHOLD:
+        candidates = [track for track in tracks
+                      if self.rarity_rank(track[1]) > 0
+                      and 0 <= track[3] < 1280 and 0 <= track[4] < 720]
+        if not candidates:
             if self.focus is not None:
-                logger.info(f'Focus disappear')
+                logger.info('Focus disappear')
             self.focus = None
             return
+        highest_rarity = max(self.rarity_rank(track[1]) for track in candidates)
+        candidates = [track for track in candidates if self.rarity_rank(track[1]) == highest_rarity]
+        z = Agent.gamma(tracks=candidates, weights=self.weights, priorities=self.priorities)
+        focus = Agent.argmax_gamma(z=z, tracks=candidates)
+        omega = focus.omega(z)
         if self.focus is None or self.focus != focus:
             logger.info(f'Focus changed, now: {id2name(focus._class)}')
             self.focus = focus
@@ -162,4 +166,18 @@ class Agent:
             self.focus.set_omega(omega)
         # if Debugger.info_enable:
         #     self.focus.show()
+
+    @staticmethod
+    def rarity_rank(class_id: int) -> int:
+        for rank, lower, upper in (
+            (5, CI.MIN_SP, CI.MAX_SP),
+            (4, CI.MIN_SSR, CI.MAX_SSR),
+            (3, CI.MIN_SR, CI.MAX_SR),
+            (2, CI.MIN_R, CI.MAX_R),
+            (1, CI.MIN_N, CI.MAX_N),
+            (1, CI.MIN_G, CI.MAX_G),
+        ):
+            if lower <= class_id <= upper:
+                return rank
+        return 0
 

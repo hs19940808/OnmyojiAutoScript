@@ -120,12 +120,14 @@ class Updater(DeployConfig, GitManager, PipManager):
         source = "origin"
         for _ in range(3):
             if self.execute(
-                    f'"{self.git}" pull {source} {self.Branch} --no-rebase', allow_failure=True
+                    f'"{self.git}" pull --ff-only {source} {self.Branch}', allow_failure=True
             ):
                 break
         else:
-            logger.warning("Git fetch failed")
+            logger.warning("Git pull failed; local changes were kept")
             return False
+
+        return True
 
 
 

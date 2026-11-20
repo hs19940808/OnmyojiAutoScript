@@ -35,12 +35,12 @@ class HyakkiyakouConfig(ConfigBase):
     hya_auto_bean: bool = Field(default=False, description='hya_auto_bean_help')
     hya_priorities: str = Field(default='', description='hya_priorities_help')
     hya_sp: float = Field(default=1., description='hya_sp_help')
-    hya_ssr: float = Field(default=1., description='hya_ssr_help')
-    hya_sr: float = Field(default=0.7, description='hya_sr_help')
-    hya_r: float = Field(default=0.3, description='hya_r_help')
-    hya_n: float = Field(default=0.0, description='hya_n_help')
-    # 呱太和N卡不是一个东西
-    hya_g: float = Field(default=0.0, description='hya_g_help')
+    hya_ssr: float = Field(default=0.9, description='hya_ssr_help')
+    hya_sr: float = Field(default=0.8, description='hya_sr_help')
+    hya_r: float = Field(default=0.7, description='hya_r_help')
+    hya_n: float = Field(default=0.6, description='hya_n_help')
+    # 呱太与N卡采用相同的最低稀有度优先级。
+    hya_g: float = Field(default=0.6, description='hya_g_help')
 
 
 class HyakkiyakouModels(ConfigBase):
