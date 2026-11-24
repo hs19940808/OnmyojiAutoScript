@@ -61,16 +61,15 @@ class ScriptTask(GameUi, GeneralBattle, HeroTestAssets, SwitchSoul):
         raise TaskEnd
 
     def enter_battle(self) -> bool:
-        """进入战斗
-        :return: True:进入成功 False:进入失败
-        """
+        """点击挑战，等到战斗准备或战斗画面出现。"""
         logger.info("Click battle")
         click_cnt, max_click = 0, random.randint(3, 4)
+        entry_wait = Timer(12)
         while True:
             self.screenshot()
-            if self.is_in_battle(False):
-                return True  # 成功进入战斗
-            if click_cnt >= max_click:  # 异常情况,怎么都无法进入
+            if self.is_in_battle(False) or (click_cnt and self.is_in_prepare(False)):
+                return True
+            if click_cnt >= max_click and entry_wait.reached():
                 break
             if self.appear_then_click(self.I_START_CHALLENGE, interval=1):  # 兵藏秘境确认挑战
                 continue
@@ -79,11 +78,14 @@ class ScriptTask(GameUi, GeneralBattle, HeroTestAssets, SwitchSoul):
             if self.appear(self.I_REAL_MONEY, interval=1):  # 这里因为门票不够而不是其他异常所以success默认还是true
                 logger.warning('Ticket is not enough')
                 return False
-            if self.appear_then_click(self.O_FIRE, interval=1.2):  # 挑战按钮
+            if click_cnt < max_click and self.appear_then_click(self.O_FIRE, interval=1.2):
                 self.device.stuck_record_clear()
                 click_cnt += 1
-                continue
-        logger.error('Battle cannot enter, maybe recognize failed')
+                if click_cnt == max_click:
+                    # 最后一次点击也可能成功，给准备界面留出加载时间。
+                    entry_wait.start()
+                    logger.info(f'Challenge clicked {click_cnt} times; wait up to {entry_wait.limit}s for battle entry')
+        logger.error(f'Battle did not load within {entry_wait.limit}s after the last challenge click')
         self.success = False  # 进入失败且不知道发生了什么情况
         return False
 
