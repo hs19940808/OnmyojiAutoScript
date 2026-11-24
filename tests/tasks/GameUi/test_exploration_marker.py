@@ -1,12 +1,14 @@
 """Exploration marker recognition under observed map-layout shifts."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
 
 from module.atom.image import RuleImage
 from tasks.GameUi.assets import GameUiAssets
+from tasks.GameUi.default_pages import page_exploration, page_hero_test
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -46,6 +48,19 @@ class ExplorationMarkerTests(unittest.TestCase):
 
     def test_blank_frame_does_not_classify_a_map(self):
         self.assertFalse(self.rule().match(np.full((720, 1280, 3), 100, dtype=np.uint8)))
+
+    def test_hero_test_title_rules_out_exploration(self):
+        """Even a strong exploration match must yield to the Hero Test title."""
+        frame = self.frame(self.rule())
+        task = SimpleNamespace(appear=lambda rule: rule.match(frame))
+        self.assertTrue(page_exploration.recognizer.evaluate(task))
+
+        title = GameUiAssets.I_CHECK_HERO_TEST
+        x, y, width, height = title.roi_front
+        frame[y:y + height, x:x + width] = title.image
+        self.assertTrue(GameUiAssets.I_CHECK_EXPLORATION.match(frame))
+        self.assertTrue(page_hero_test.recognizer.evaluate(task))
+        self.assertFalse(page_exploration.recognizer.evaluate(task))
 
     def test_generated_asset_keeps_the_source_search_box(self):
         source = self.rule()

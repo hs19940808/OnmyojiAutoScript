@@ -65,6 +65,7 @@ class NavigatorSession:
                     on_enter_failure=transition.on_enter_failure,
                     on_leave_success=transition.on_leave_success,
                     on_leave_failure=transition.on_leave_failure,
+                    arrival_timeout=transition.arrival_timeout,
                 )
         return cloned_pages
 
@@ -112,6 +113,7 @@ class NavigatorSession:
                 on_enter_failure=transition.on_enter_failure,
                 on_leave_success=transition.on_leave_success,
                 on_leave_failure=transition.on_leave_failure,
+                arrival_timeout=transition.arrival_timeout,
             )
         return cloned_page
 

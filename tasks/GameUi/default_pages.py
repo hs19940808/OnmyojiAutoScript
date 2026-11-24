@@ -16,7 +16,7 @@ from module.atom.click import RuleClick
 from tasks.Component.GeneralBattle.assets import GeneralBattleAssets
 from tasks.GlobalGame.assets import GlobalGameAssets
 from tasks.GameUi.assets import GameUiAssets
-from tasks.GameUi.matcher import any_of, all_of
+from tasks.GameUi.matcher import any_of, all_of, not_
 from tasks.GameUi.page_definition import Page
 from tasks.KekkaiUtilize.assets import KekkaiUtilizeAssets
 from tasks.Restart.assets import RestartAssets
@@ -216,7 +216,11 @@ page_town.connect(page_hyakkiyakou, GameUiAssets.I_TOWN_GOTO_HYAKKIYAKOU, key="p
 
 
 # 探索主页。
-page_exploration = Page(GameUiAssets.I_CHECK_EXPLORATION, category="global")
+# 英杰试炼大厅的背景也可能命中探索图标，需排除明确的英杰试炼标题。
+page_exploration = Page(
+    all_of(GameUiAssets.I_CHECK_EXPLORATION, not_(GameUiAssets.I_CHECK_HERO_TEST)),
+    category="global",
+)
 page_exploration.connect(page_main, GlobalGameAssets.I_UI_BACK_YELLOW, key="page_exploration->page_main")
 page_exploration.add_enter_failure_hooks(ExplorationAssets.I_E_OPEN_FOLDER)
 page_main.connect(page_exploration, GameUiAssets.I_MAIN_GOTO_EXPLORATION, key="page_main->page_exploration")
@@ -290,7 +294,13 @@ page_exploration.connect(
 
 page_hero_test = Page(GameUiAssets.I_CHECK_HERO_TEST, category="global")
 page_hero_test.connect(page_exploration, GlobalGameAssets.I_UI_BACK_YELLOW, key="page_hero_test->page_exploration")
-page_exploration.connect(page_hero_test, GameUiAssets.I_EXPLORATION_GOTO_HERO_TEST, key="page_exploration->page_hero_test")
+# 英杰试炼的独立加载画面可能超过默认的到达等待时间。
+page_exploration.connect(
+    page_hero_test,
+    GameUiAssets.I_EXPLORATION_GOTO_HERO_TEST,
+    key="page_exploration->page_hero_test",
+    arrival_timeout=15.0,
+)
 
 
 def handle_battle_page(task) -> bool:

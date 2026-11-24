@@ -41,6 +41,7 @@ class Transition:
         on_enter_failure: 到达终点失败后的边级 hook。
         on_leave_success: 成功离开起点后的边级 hook。
         on_leave_failure: 离开起点失败后的边级 hook。
+        arrival_timeout: 操作完成后等待目标页面的秒数。
     """
 
     source: "Page"
@@ -52,6 +53,7 @@ class Transition:
     on_enter_failure: list[ActionLike] = field(default_factory=list)
     on_leave_success: list[ActionLike] = field(default_factory=list)
     on_leave_failure: list[ActionLike] = field(default_factory=list)
+    arrival_timeout: float = 4.0
 
     def __post_init__(self):
         """补齐未显式提供的边 key。"""
@@ -154,6 +156,7 @@ class Page:
         on_enter_failure: Iterable[ActionLike] = None,
         on_leave_success: Iterable[ActionLike] = None,
         on_leave_failure: Iterable[ActionLike] = None,
+        arrival_timeout: float = 4.0,
     ) -> Transition:
         """声明从当前页面到目标页面的一条边。
 
@@ -166,6 +169,7 @@ class Page:
             on_enter_failure: 边级进入失败 hook。
             on_leave_success: 边级离开成功 hook。
             on_leave_failure: 边级离开失败 hook。
+            arrival_timeout: 操作完成后等待目标页面的秒数。
 
         Returns:
             新建或替换后的 `Transition` 对象。
@@ -181,6 +185,7 @@ class Page:
             on_enter_failure=list(on_enter_failure or []),
             on_leave_success=list(on_leave_success or []),
             on_leave_failure=list(on_leave_failure or []),
+            arrival_timeout=arrival_timeout,
         )
         if transition.key is not None:
             self.transitions = [item for item in self.transitions if item.key != transition.key]

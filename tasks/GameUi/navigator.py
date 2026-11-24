@@ -476,7 +476,7 @@ class GameUi(BaseTask, GameUiAssets):
             context="goto_page",
         )
 
-    def _wait_for_destination(self, destination: Page, timeout: float = 4.0) -> bool:
+    def _wait_for_destination(self, destination: Page, timeout: float) -> bool:
         """等待下一页面稳定出现。
 
         Args:
@@ -555,7 +555,7 @@ class GameUi(BaseTask, GameUiAssets):
             )
             return False
 
-        if self._wait_for_destination(destination):
+        if self._wait_for_destination(destination, transition.arrival_timeout):
             self._run_hooks(source.on_leave_success)
             self._run_hooks(transition.on_leave_success)
             self._run_hooks(destination.on_enter_success)
