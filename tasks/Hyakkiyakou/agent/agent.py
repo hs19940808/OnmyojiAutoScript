@@ -25,31 +25,27 @@ def generate_gaussian_patch(size=(300, 300), mean=0, std_dev=60):
 
 
 def embed_patch_in_canvas(canvas, patch, position=(0, 0), patch_size=(300, 300)):
+    """把热力图补丁按目标中心贴入画布，并裁去超出画布的部分。"""
     canvas_height, canvas_width = 720, 1280
     patch_height, patch_width = patch_size
     pos_x, pos_y = position
     pos_x = max(0, min(pos_x, canvas_width))
     pos_y = max(0, min(pos_y, canvas_width))
 
-    x1 = pos_x - patch_width // 2
-    y1 = pos_y - patch_height // 2
-    x2 = pos_x + patch_width // 2
-    y2 = pos_y + patch_height // 2
-    x1 = max(0, x1)
-    y1 = max(0, y1)
-    x2 = min(canvas_width, x2)
-    y2 = min(canvas_height, y2)
+    left = pos_x - patch_width // 2
+    top = pos_y - patch_height // 2
+    x1 = max(0, left)
+    y1 = max(0, top)
+    x2 = min(canvas_width, left + patch_width)
+    y2 = min(canvas_height, top + patch_height)
     embed_w = x2 - x1
     embed_h = y2 - y1
     if embed_w <= 0 or embed_h <= 0:
         logger.warning(f'Cannot embed patch in canvas: ({position})')
         return canvas
-    if embed_w < patch_width or embed_h < patch_height:
-        _patch = patch[:embed_h, :embed_w]
-    else:
-        _patch = patch
-    # Embed the patch in the canvas
-    canvas[y1:y2, x1:x2] += _patch
+    patch_x = x1 - left
+    patch_y = y1 - top
+    canvas[y1:y2, x1:x2] += patch[patch_y:patch_y + embed_h, patch_x:patch_x + embed_w]
     return canvas
 
 
@@ -113,7 +109,7 @@ class Agent:
         return z
 
     @classmethod
-    def argmax_gamma(cls, z: np.ndarray, tracks: list[tuple]) -> Focus:
+    def argmax_gamma(cls, z: np.ndarray, tracks: list[tuple]) -> Focus | None:
         max_y, max_x = np.unravel_index(np.argmax(z), z.shape)
         max_variance = 2000
         max_index = -1
@@ -123,6 +119,8 @@ class Agent:
             if variance < max_variance:
                 max_index = index
                 max_variance = variance
+        if max_index < 0:
+            return None
         return Focus(inputs=tracks[max_index])
 
     def decision(self, tracks: list[tuple], state: list, freeze: bool = False) -> list:
@@ -144,6 +142,7 @@ class Agent:
         return result
 
     def check_observe(self, tracks: list[tuple]):
+        """在画面内按稀有度筛选目标，并在无匹配时清除焦点。"""
         candidates = [track for track in tracks
                       if self.rarity_rank(track[1]) > 0
                       and 0 <= track[3] < 1280 and 0 <= track[4] < 720]
@@ -156,6 +155,11 @@ class Agent:
         candidates = [track for track in candidates if self.rarity_rank(track[1]) == highest_rarity]
         z = Agent.gamma(tracks=candidates, weights=self.weights, priorities=self.priorities)
         focus = Agent.argmax_gamma(z=z, tracks=candidates)
+        if focus is None:
+            if self.focus is not None:
+                logger.info('Focus disappear')
+            self.focus = None
+            return
         omega = focus.omega(z)
         if self.focus is None or self.focus != focus:
             logger.info(f'Focus changed, now: {id2name(focus._class)}')
